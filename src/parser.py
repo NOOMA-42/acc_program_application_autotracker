@@ -262,6 +262,8 @@ def parse_dates_and_format(body):
         else:
             continue
 
+    if formatted_dates == "":
+        return "NONE"
     return formatted_dates
 
 
@@ -274,3 +276,4 @@ def parse_pricing(project_complexity):
         pricing_per_hours = hard_cost
     else:
         pricing_per_hours = "error"
+    return pricing_per_hours
