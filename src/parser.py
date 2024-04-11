@@ -94,11 +94,11 @@ def parse_milestone(body, issue_title, project_complexity):
 
         # Calculate cost per milestone based on project complexity
         if project_complexity == "Easy":
-            milestone_cost = duration * float(fte) * float(easy_cost)
+            milestone_cost = milestone_hours * float(fte) * float(easy_cost)
         elif project_complexity == "Medium":
-            milestone_cost = duration * float(fte) * float(medium_cost)
+            milestone_cost = milestone_hours * float(fte) * float(medium_cost)
         elif project_complexity == "Hard":
-            milestone_cost = duration * float(fte) * float(hard_cost)
+            milestone_cost = milestone_hours * float(fte) * float(hard_cost)
         else:
             milestone_cost = "error"
         format_cost_per_milestone_components.append(milestone_cost)
@@ -157,47 +157,94 @@ def parse_project_complexity(body):
 
 
 def parse_dates_and_format(body):
-    body = re.sub(r"\*\*|\r\n", "", body)
+    body = re.sub(r"\*\*|\\r\\n", "", body)  # Remove unnecessary patterns
 
     # Patterns to find the starting date, estimated delivery date, and duration for each milestone
-    starting_date_pattern = r"Starting Date: (\d{4}) (\w+) (\d+)[a-z]{2}"
-    delivery_date_pattern = r"Estimated delivery date: (\w+) (\d+) (\d{4})"
-    duration_pattern = r"Estimated Duration: (\d+) (hours|weeks|months|week|month|hour)"
-    milestone_pattern = r"\*\*Milestone \d+:"
+    starting_date_pattern = r"Starting Date: (\w+) (\d+)(?:th|rd|st|nd)?,? (\d{4})"
+    delivery_date_pattern = r"Estimated delivery date: (\w+) (\d+)(?:th|rd|st|nd)?,? (\d{4})"
+    duration_pattern = (
+        r"(?!Total)\sEstimated Duration: (\d+) (hours|weeks|months|week|month|hour)"
+    )
+    milestone_pattern = r"Milestone:? (\d+)\s*"
 
-    start_date_match = re.search(starting_date_pattern, body)
-    delivery_date_match = re.search(delivery_date_pattern, body)
-    duration_match = re.search(duration_pattern, body)
-    milestones_count = len(re.findall(milestone_pattern, body))
+    start_dates = []
+    delivery_dates = []
+    durations = []
+    milestones_count = 0
 
-    if not (start_date_match or delivery_date_match) or not duration_match:
-        return "Error: Cannot calculate because neither start nor delivery dates, or duration, are given."
+    for milestone_match in re.finditer(milestone_pattern, body):
+        milestone_index = int(milestone_match.group(1))
+        milestone_start = milestone_match.end()
+        if milestone_index > milestones_count:
+            milestones_count = milestone_index
 
-    try:
+        # Extract start date, delivery date, and duration for the current milestone
+        start_date_match = re.search(starting_date_pattern, body[milestone_start:])
+        delivery_date_match = re.search(delivery_date_pattern, body[milestone_start:])
+        duration_match = re.search(duration_pattern, body[milestone_start:])
+
         if start_date_match:
-            start_date = datetime.strptime(
-                f"{start_date_match.group(1)} {start_date_match.group(2)} {start_date_match.group(3)}",
-                "%Y %B %d",
-            )
+            try:
+                start_date = datetime.strptime(
+                    f"{start_date_match.group(2)} {start_date_match.group(1)} {start_date_match.group(3)}",
+                    "%d %b %Y",
+                )
+            except ValueError:
+                start_date = datetime.strptime(
+                    f"{start_date_match.group(2)} {start_date_match.group(1)} {start_date_match.group(3)}",
+                    "%d %B %Y",
+                )
+            start_dates.append(start_date)
         else:
-            delivery_date = datetime.strptime(
-                f"{delivery_date_match.group(2)}, {delivery_date_match.group(3)} {delivery_date_match.group(1)}",
-                "%d, %Y %B",
-            )
+            start_dates.append(None)
 
-        duration_value = int(duration_match.group(1))
-        duration_unit = duration_match.group(2)
+        if delivery_date_match:
+            try:
+                delivery_date = datetime.strptime(
+                    f"{delivery_date_match.group(2)} {delivery_date_match.group(1)} {delivery_date_match.group(3)}",
+                    "%d %b %Y",
+                )
+            except ValueError:
+                delivery_date = datetime.strptime(
+                    f"{delivery_date_match.group(2)} {delivery_date_match.group(1)} {delivery_date_match.group(3)}",
+                    "%d %B %Y",
+                )
+            except ValueError:
+                ValueError(f"Error: Invalid delivery date format.")
+            delivery_dates.append(delivery_date)
+        else:
+            delivery_dates.append(None)
 
-        if start_date_match:
+        if duration_match:
+            duration_value = int(duration_match.group(1))
+            duration_unit = duration_match.group(2)
+            durations.append((duration_value, duration_unit))
+        else:
+            durations.append(None)
+
+    # Calculate and format end dates for each milestone
+    formatted_dates = ""
+    for i in range(milestones_count):
+        start_date = start_dates[i]
+        delivery_date = delivery_dates[i]
+        duration_value, duration_unit = durations[i] or (None, None)
+
+        if start_date and duration_value and duration_unit:
             if duration_unit == "hours" or duration_unit == "hour":
-                delivery_date = start_date + timedelta(hours=duration_value)
+                end_date = start_date + timedelta(hours=duration_value)
             elif duration_unit == "weeks" or duration_unit == "week":
-                delivery_date = start_date + timedelta(weeks=duration_value)
+                end_date = start_date + timedelta(weeks=duration_value)
             elif duration_unit == "months" or duration_unit == "month":
-                delivery_date = start_date + timedelta(weeks=duration_value * 4)
+                end_date = start_date + timedelta(weeks=duration_value * 4)
             else:
                 return "Error: Invalid duration unit."
-        else:
+            formatted_dates += (
+                f"Start Date for Milestone {i+1}: {start_date.strftime('%Y %b %d')}, "
+            )
+            formatted_dates += (
+                f"End Date for Milestone {i+1}: {end_date.strftime('%B %d, %Y')}; "
+            )
+        elif delivery_date and duration_value and duration_unit:
             if duration_unit == "hours" or duration_unit == "hour":
                 start_date = delivery_date - timedelta(hours=duration_value)
             elif duration_unit == "weeks" or duration_unit == "week":
@@ -206,28 +253,16 @@ def parse_dates_and_format(body):
                 start_date = delivery_date - timedelta(weeks=duration_value * 4)
             else:
                 return "Error: Invalid duration unit."
-    except ValueError:
-        return "Error: Incorrect date format."
+            formatted_dates += (
+                f"Start Date for Milestone {i+1}: {start_date.strftime('%Y %b %d')}, "
+            )
+            formatted_dates += (
+                f"End Date for Milestone {i+1}: {delivery_date.strftime('%B %d, %Y')}; "
+            )
+        else:
+            continue
 
-    if milestones_count == 0:
-        return "Error: No milestones found."
-
-    # Formatting start date
-    formatted_dates = f"Start: {start_date.strftime('%Y/%m/%d')}\n"
-
-    # Calculate and format end dates for each milestone
-    total_duration = (delivery_date - start_date).days
-    milestone_duration = total_duration // milestones_count
-
-    for i in range(1, milestones_count + 1):
-        end_date = start_date + timedelta(days=milestone_duration * i)
-        formatted_dates += (
-            f"m{i} end: {end_date.strftime('%Y/%m/%d')}\n"
-            if i != milestones_count
-            else f"m{i}=end:  {end_date.strftime('%Y/%m/%d')}\n"
-        )
-
-    return formatted_dates[:-1]  # Remove the last newline
+    return formatted_dates
 
 
 def parse_pricing(project_complexity):

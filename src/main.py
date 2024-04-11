@@ -2,6 +2,7 @@ import requests
 import csv
 import re
 import os
+import time
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from parser import (
@@ -11,6 +12,7 @@ from parser import (
     parse_dates_and_format,
     parse_pricing,
 )
+from csv_writer import write_to_csv
 
 load_dotenv()
 
@@ -23,6 +25,7 @@ headers = {
 
 repo_url = "https://api.github.com/repos/privacy-scaling-explorations/acceleration-program/issues"
 output_csv_path = "issues.csv"
+
 
 def get_issues(url):
     issues = []
@@ -122,81 +125,6 @@ def preprocess_issues(issues):
     return tasks
 
 
-def write_to_csv(tasks, filepath):
-    with open(filepath, mode="w", newline="", encoding="utf-8") as file:
-        writer = csv.writer(file, quoting=csv.QUOTE_ALL)
-        header = [
-            "Type",
-            "Title",
-            "Issue Creator",
-            "Assignee (Grant Liaison or WIP Task Assignee)",
-            "Task Link",
-            "Project Complexity",
-            "Linked Proposal",
-            "Proposal Link",
-            "Applicant",
-            "Total Duration",
-            "Total FTE",
-            "Total Working Hours",
-            "Formatted Equation",
-            "Pricing Per Hours",
-            "Cost Per Milestone",
-            "Start/End Date",
-            "Deliverable Repo Available",
-        ]
-        writer.writerow(header)
-
-        for task_link, task_info in tasks.items():
-            if task_info["proposals"]:
-                for proposal in task_info["proposals"]:
-                    proposal_type = (
-                        "Task & Proposal"
-                        if len(task_info["proposals"]) == 1
-                        else "Task & Competing Proposal"
-                    )
-                    row = [
-                        proposal_type,
-                        task_info["title"],
-                        task_info["creator"],
-                        task_info["assignee"],
-                        task_link,
-                        task_info["project_complexity"],
-                        "Yes",
-                        proposal["link"],
-                        proposal["creator"],
-                        proposal["total_duration_value"],
-                        proposal["total_fte"],
-                        proposal["total_working_hours"],
-                        proposal["formatted_equation"],
-                        task_info["Pricing Per Hours"],
-                        proposal["format_cost_per_milestone"],
-                        proposal.get("start_end_date", "NONE"),
-                        "NONE",
-                    ]
-                    writer.writerow(row)
-            else:
-                row = [
-                    task_info["type"],
-                    task_info["title"],
-                    task_info["creator"],
-                    task_info["assignee"],
-                    task_link,
-                    task_info["project_complexity"],
-                    "No",
-                    "NONE",
-                    "NONE",
-                    "NONE",
-                    "NONE",
-                    "NONE",
-                    "NONE",
-                    "NONE",
-                    "NONE",
-                    "NONE",
-                    "NONE",
-                ]
-                writer.writerow(row)
-
-
 def generate_metrics(tasks):
     metrics = {
         "WIP Tasks": 0,
@@ -220,35 +148,6 @@ def generate_metrics(tasks):
         metrics["Proposals"] += len(task_info["proposals"])
 
     return metrics
-
-
-def test_get_issues_title(url):
-    issues_titles = []
-    while url:
-        response = requests.get(url, headers=headers)
-        if response.status_code == 200:
-            issues = response.json()
-            for issue in issues:
-                issues_titles.append(issue.get("title", ""))
-            # Check the "link" header for the next page's URL
-            links = response.headers.get("link", "")
-            next_page = next(
-                (link for link in links.split(",") if 'rel="next"' in link), None
-            )
-            if next_page:
-                url = next_page.split(";")[0].strip("<>")
-            else:
-                url = None
-        elif response.status_code == 429:  # Too Many Requests
-            # Get the rate limit reset time from the headers
-            reset_time = float(response.headers["X-RateLimit-Reset"])
-            current_time = time.time()
-            delay = reset_time - current_time + 1  # Add an extra second for safety
-            print(f"Rate limit reached. Waiting {delay} seconds before retrying...")
-            time.sleep(delay)
-        else:
-            url = None
-    return issues_titles
 
 
 if __name__ == "__main__":
