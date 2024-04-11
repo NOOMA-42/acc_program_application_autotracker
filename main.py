@@ -99,7 +99,7 @@ def parse_milestone(body, issue_title, project_complexity):
     formatted_equation_components = []
     format_cost_per_milestone_components = []
     total_working_hours_calculated = 0
-    format_cost_per_milestone = []
+    format_cost_per_milestone = ""
 
     for (duration, unit), fte in zip(milestones_duration, milestone_fte):
         # Calculate milestone duration in hours
@@ -127,7 +127,7 @@ def parse_milestone(body, issue_title, project_complexity):
             milestone_cost = duration * float(fte) * float(hard_cost)
         else:
             milestone_cost = "error"
-        format_cost_per_milestone.append(milestone_cost)
+        format_cost_per_milestone_components.append(milestone_cost)
 
         # Formatting the equation for each milestone
         if project_complexity == "Easy":
@@ -153,7 +153,7 @@ def parse_milestone(body, issue_title, project_complexity):
         else "error"
     )
     for i, num in enumerate(format_cost_per_milestone_components, start=1):
-        format_cost_per_milestone += f"m{i} = ${num:,}\n"
+        format_cost_per_milestone += f"m{i} = ${num}; "
 
     # Check if the total working hours calculated is the same as the one provided in the issue body
     if total_working_hours_match and total_working_hours_calculated != int(
@@ -181,23 +181,50 @@ def parse_project_complexity(body):
     project_complexity_match = re.search(project_complexity_pattern, body)
     return project_complexity_match.group(1) if project_complexity_match else "error"
 
-
 def parse_dates_and_format(body):
-    # Patterns to find the starting date and estimated delivery date for each milestone
+    body = re.sub(r"\*\*|\r\n", "", body)
+
+    # Patterns to find the starting date, estimated delivery date, and duration for each milestone
     starting_date_pattern = r"Starting Date: (\d{4}) (\w+) (\d+)[a-z]{2}"
-    delivery_date_pattern = r"Estimated delivery date: (\d{4}) (\w+) (\d+)[a-z]{2}"
+    delivery_date_pattern = r"Estimated delivery date: (\w+) (\d+) (\d{4})"
+    duration_pattern = r"Estimated Duration: (\d+) (hours|weeks|months|week|month|hour)"
     milestone_pattern = r"\*\*Milestone \d+:"
     
     start_date_match = re.search(starting_date_pattern, body)
     delivery_date_match = re.search(delivery_date_pattern, body)
+    duration_match = re.search(duration_pattern, body)
     milestones_count = len(re.findall(milestone_pattern, body))
 
-    if not start_date_match or not delivery_date_match:
-        return "Error: Cannot calculate because neither start nor delivery dates are given."
+    if not (start_date_match or delivery_date_match) or not duration_match:
+        return "Error: Cannot calculate because neither start nor delivery dates, or duration, are given."
     
     try:
-        start_date = datetime.strptime(f"{start_date_match.group(1)} {start_date_match.group(2)} {start_date_match.group(3)}", "%Y %B %d")
-        delivery_date = datetime.strptime(f"{delivery_date_match.group(1)} {delivery_date_match.group(2)} {delivery_date_match.group(3)}", "%Y %B %d")
+        if start_date_match:
+            start_date = datetime.strptime(f"{start_date_match.group(1)} {start_date_match.group(2)} {start_date_match.group(3)}", "%Y %B %d")
+        else:
+            delivery_date = datetime.strptime(f"{delivery_date_match.group(2)}, {delivery_date_match.group(3)} {delivery_date_match.group(1)}", "%d, %Y %B")
+            
+        duration_value = int(duration_match.group(1))
+        duration_unit = duration_match.group(2)
+        
+        if start_date_match:
+            if duration_unit == "hours" or duration_unit == "hour":
+                delivery_date = start_date + timedelta(hours=duration_value)
+            elif duration_unit == "weeks" or duration_unit == "week":
+                delivery_date = start_date + timedelta(weeks=duration_value)
+            elif duration_unit == "months" or duration_unit == "month":
+                delivery_date = start_date + timedelta(weeks=duration_value * 4)
+            else:
+                return "Error: Invalid duration unit."
+        else:
+            if duration_unit == "hours" or duration_unit == "hour":
+                start_date = delivery_date - timedelta(hours=duration_value)
+            elif duration_unit == "weeks" or duration_unit == "week":
+                start_date = delivery_date - timedelta(weeks=duration_value)
+            elif duration_unit == "months" or duration_unit == "month":
+                start_date = delivery_date - timedelta(weeks=duration_value * 4)
+            else:
+                return "Error: Invalid duration unit."
     except ValueError:
         return "Error: Incorrect date format."
 
@@ -217,22 +244,22 @@ def parse_dates_and_format(body):
     
     return formatted_dates[:-1]  # Remove the last newline
 
-
-
-
 def process_task(title, issue):
     body = issue.get("body", "")
     issue_link = issue.get("html_url")
     assignee_data = issue.get("assignee")
     assignee = assignee_data.get("login", "") if assignee_data else ""
     creator = issue.get("user", {}).get("login", "")
+    labels = [label["name"].lower() for label in issue.get("labels", [])]
 
     project_complexity = parse_project_complexity(body)
     task_type = "Task"
-    if title.lower().startswith("[wip]"):
-        task_type = "WIP Task"
-    elif title.lower().startswith("self proposed open task"):
-        task_type = "Self Proposed Task"
+    if "wip" in labels:
+        task_type = "WIP"
+    elif "self proposed open task" in labels:
+        task_type = "Self Proposed Open Task"
+    elif "umbrella task" in labels:
+        task_type = "Umbrella Task"
 
     # Pricing Per Hours
     if project_complexity == "Easy":
@@ -268,14 +295,16 @@ def process_proposal(title, issue, tasks):
     except:
         raise ValueError(f"Error: {title} linked task not found.")
     working_hour_data = parse_milestone(body, title, project_complexity)
+    start_end_date = parse_dates_and_format(body)
 
     return {
         "creator": creator,
         "assignee": assignee,
         "link": issue_link,
         "project_complexity": project_complexity,
-        **working_hour_data,
         "linked_tasks": linked_tasks,
+        "start_end_date": start_end_date,
+        **working_hour_data,
     }
 
 
@@ -303,64 +332,95 @@ def preprocess_issues(issues):
 def write_to_csv(tasks, filepath):
     with open(filepath, mode="w", newline="", encoding="utf-8") as file:
         writer = csv.writer(file, quoting=csv.QUOTE_ALL)
-        writer.writerow(
-            [
-                "Type",
-                "Title",
-                "Issue Creator",
-                "Assignee (Grant Liaison or WIP Task Assignee)",
-                "Task Link",
-                "Project Complexity",
-                "Linked Proposal",
-                "Proposal Link",
-                "Applicant",
-                "Total Duration",
-                "Total FTE",
-                "Total Working Hours",
-                "Formatted Equation",
-                "Pricing Per Hours",
-                "Cost Per Milestone",
-                "Start/End Date",
-                "Deliverable Repo Available",
-            ]
-        )
+        header = [
+            "Type",
+            "Title",
+            "Issue Creator",
+            "Assignee (Grant Liaison or WIP Task Assignee)",
+            "Task Link",
+            "Project Complexity",
+            "Linked Proposal",
+            "Proposal Link",
+            "Applicant",
+            "Total Duration",
+            "Total FTE",
+            "Total Working Hours",
+            "Formatted Equation",
+            "Pricing Per Hours",
+            "Cost Per Milestone",
+            "Start/End Date",
+            "Deliverable Repo Available",
+        ]
+        writer.writerow(header)
 
         for task_link, task_info in tasks.items():
             if task_info["proposals"]:
                 for proposal in task_info["proposals"]:
                     proposal_type = "Task & Proposal" if len(task_info["proposals"]) == 1 else "Task & Competing Proposal"
-                    writer.writerow(
-                        [
-                            proposal_type,
-                            task_info["title"],
-                            task_info["creator"],
-                            task_info["assignee"],
-                            task_link,
-                            task_info["project_complexity"],
-                            "Yes",
-                            proposal["link"],
-                            proposal["creator"],
-                            proposal["total_duration_value"],
-                            proposal["total_fte"],
-                            proposal["total_working_hours"],
-                            proposal["formatted_equation"],
-                            task_info["Pricing Per Hours"],
-                            proposal["format_cost_per_milestone"],
-                        ]
-                    )
-            else:
-                writer.writerow(
-                    [
-                        task_info["type"],
+                    row = [
+                        proposal_type,
                         task_info["title"],
                         task_info["creator"],
                         task_info["assignee"],
                         task_link,
                         task_info["project_complexity"],
-                        "No",
-                        "",
+                        "Yes",
+                        proposal["link"],
+                        proposal["creator"],
+                        proposal["total_duration_value"],
+                        proposal["total_fte"],
+                        proposal["total_working_hours"],
+                        proposal["formatted_equation"],
+                        task_info["Pricing Per Hours"],
+                        proposal["format_cost_per_milestone"],
+                        proposal.get("start_end_date", "NONE"),
+                        "NONE",
                     ]
-                )
+                    writer.writerow(row)
+            else:
+                row = [
+                    task_info["type"],
+                    task_info["title"],
+                    task_info["creator"],
+                    task_info["assignee"],
+                    task_link,
+                    task_info["project_complexity"],
+                    "No",
+                    "NONE",
+                    "NONE",
+                    "NONE",
+                    "NONE",
+                    "NONE",
+                    "NONE",
+                    "NONE",
+                    "NONE",
+                    "NONE",
+                    "NONE",
+                ]
+                writer.writerow(row)
+
+def generate_metrics(tasks):
+    metrics = {
+        "WIP Tasks": 0,
+        "Tasks Looking for Reviewer": 0,
+        "Available Tasks": 0,
+        "Proposals": 0,
+        "Total Tasks": 0,
+    }
+
+    for task_link, task_info in tasks.items():
+        metrics["Total Tasks"] += 1
+
+        if task_info["type"] == "WIP":
+            metrics["WIP Tasks"] += 1
+        elif not task_info["assignee"]:
+            metrics["Tasks Looking for Reviewer"] += 1
+        elif not task_info["proposals"]:
+            metrics["Available Tasks"] += 1
+        else:
+            metrics["Proposals"] += len(task_info["proposals"])
+
+    return metrics
 
 def test_get_issues_title(url):
     issues_titles = []
@@ -394,3 +454,8 @@ if __name__ == "__main__":
     tasks = preprocess_issues(issues)
     write_to_csv(tasks, output_csv_path)
     print(f"Data written to {output_csv_path}")
+
+    metrics = generate_metrics(tasks)
+    print("Metrics:")
+    for key, value in metrics.items():
+        print(f"{key}: {value}")
