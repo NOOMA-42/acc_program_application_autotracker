@@ -161,7 +161,9 @@ def parse_dates_and_format(body):
 
     # Patterns to find the starting date, estimated delivery date, and duration for each milestone
     starting_date_pattern = r"Starting Date: (\w+) (\d+)(?:th|rd|st|nd)?,? (\d{4})"
-    delivery_date_pattern = r"Estimated delivery date: (\w+) (\d+)(?:th|rd|st|nd)?,? (\d{4})"
+    delivery_date_pattern = (
+        r"Estimated delivery date: (\w+) (\d+)(?:th|rd|st|nd)?,? (\d{4})"
+    )
     duration_pattern = (
         r"(?!Total)\sEstimated Duration: (\d+) (hours|weeks|months|week|month|hour)"
     )
