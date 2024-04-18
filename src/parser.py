@@ -13,6 +13,10 @@ hard_cost = os.getenv("HARD")
 
 
 def parse_issue_link_from_body(body, issue_title):
+    """  
+    A parser for proposal
+    """
+
     # Adjust the regex if the link format in the body varies
     links = re.findall(
         r"https://github\.com/privacy-scaling-explorations/acceleration-program/issues/\d+",
@@ -37,7 +41,7 @@ def parse_milestone(body, issue_title, project_complexity):
     total_fte_pattern = r"Full-time equivalent \(FTE\):[\s]*([\d.]+)"
     total_working_hours_pattern = r"Total Estimated Working Hours: (\d+) hours"
 
-    milestone_duration_pattern = r"(?<!Total )Estimated Duration:[\s]*(\d+)[\s]*(hours|weeks|months|week|month|hour)"
+    milestone_duration_pattern = r"(?<!Total )Estimated Duration:[\s]*(\d+(?:\.\d+)?)\s*(hours|weeks|months|week|month|hour)"
     milestone_fte_pattern = r"FTE:[\s]*([\d.]+)"
 
     # Extract total duration and FTE
@@ -77,7 +81,7 @@ def parse_milestone(body, issue_title, project_complexity):
 
     for (duration, unit), fte in zip(milestones_duration, milestone_fte):
         # Calculate milestone duration in hours
-        duration = int(duration)
+        duration = float(duration)
         if unit == "hours" or unit == "hour":
             milestone_hours = duration
         elif unit == "weeks" or unit == "week":
@@ -137,12 +141,19 @@ def parse_milestone(body, issue_title, project_complexity):
             f"Issue '{issue_title}': Total working hours calculated ({total_working_hours_calculated}) do not match the provided value ({total_working_hours_match.group(1)})."
         )
 
+    # Total Cost
+    total_cost = 0
+    for milestone_cost in format_cost_per_milestone_components:
+        if milestone_cost != "error":
+            total_cost += milestone_cost
+
     return {
         "total_duration_value": total_duration_value,
         "total_duration_unit": total_duration_unit,
         "total_fte": total_fte,
         "formatted_equation": formatted_equation,
         "format_cost_per_milestone": format_cost_per_milestone,
+        "total_cost": total_cost,
         "total_working_hours": total_working_hours_calculated
         if total_working_hours_calculated
         else "error",

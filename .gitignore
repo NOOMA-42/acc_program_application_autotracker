@@ -1,4 +1,5 @@
 .env
 issues.csv
 .ruff_cache
+app.log
 __pycache__

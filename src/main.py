@@ -3,6 +3,7 @@ import csv
 import re
 import os
 import time
+from time import sleep
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from parser import (
@@ -13,6 +14,10 @@ from parser import (
     parse_pricing,
 )
 from csv_writer import write_to_csv
+import logging
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(filename='app.log', encoding='utf-8', level=logging.DEBUG, format='%(levelname)s:%(asctime)s %(message)s')
 
 load_dotenv()
 
@@ -27,42 +32,59 @@ repo_url = "https://api.github.com/repos/privacy-scaling-explorations/accelerati
 output_csv_path = "issues.csv"
 
 
-def get_issues(url):
+def get_issues():
     issues = []
-    while url:
-        response = requests.get(url, headers=headers)
-        if response.status_code == 200:
-            issues.extend(response.json())
-            # Check the "link" header for the next page's URL
-            links = response.headers.get("link", "")
-            next_page = next(
-                (link for link in links.split(",") if 'rel="next"' in link), None
-            )
-            if next_page:
-                url = next_page.split(";")[0].strip("<>")
+    url = repo_url
+    for status in ["open", "closed"]:
+        page = 1
+        while True:
+            params = {
+                "page": page,
+                "per_page": 50,  # Reduce the per_page value
+                "state": status,
+            }
+            response = requests.get(url, headers=headers, params=params)
+            if response.status_code == 200:
+                issues.extend(response.json())
+                if len(response.json()) == 50:
+                    page += 1
+                else:
+                    break
+            elif response.status_code == 403 and "rate limit" in response.text.lower():
+                # Rate limit exceeded, wait for the reset time
+                reset_time = int(response.headers["X-RateLimit-Reset"])
+                now = time.time()
+                wait_time = reset_time - now + 10  # Add 10 seconds buffer
+                print(f"Rate limit exceeded, waiting for {wait_time} seconds...")
+                sleep(wait_time)
             else:
-                url = None
-        else:
-            url = None
+                break
+
     return issues
 
 
 def process_task(title, issue):
     body = issue.get("body", "")
     issue_link = issue.get("html_url")
+    state = issue.get("state")
     assignee_data = issue.get("assignee")
     assignee = assignee_data.get("login", "") if assignee_data else ""
     creator = issue.get("user", {}).get("login", "")
     labels = [label["name"].lower() for label in issue.get("labels", [])]
 
     project_complexity = parse_project_complexity(body)
-    task_type = "Task"
+    task_type = "Closed Task" if state == "closed" else "Task"
+    logger.debug(f"{title}; {task_type}; {state}")
     if "wip" in labels:
-        task_type = "WIP"
+        task_type = "Closed WIP" if state == "closed" else "WIP"
     elif "self proposed open task" in labels:
-        task_type = "Self Proposed Open Task"
+        task_type = (
+            "Closed Self Proposed Open Task"
+            if state == "closed"
+            else "Self Proposed Open Task"
+        )
     elif "umbrella task" in labels:
-        task_type = "Umbrella Task"
+        task_type = "Closed Umbrella Task" if state == "closed" else "Umbrella Task"
 
     # Pricing Per Hours
     pricing_per_hours = parse_pricing(project_complexity)
@@ -105,23 +127,36 @@ def process_proposal(title, issue, tasks):
 
 
 def preprocess_issues(issues):
+    """ 
+    get task and proposal separately
+    """
+
     tasks = {}
     proposals = {}
-
+    logger.info('preprocess_issue')
+    
+    # Task
     for issue in issues:
+        title = issue.get("title", "").strip()
+        if "pull_request" in issue:
+            continue
+        if title.lower().startswith(("proposal: ", "proposal ")):
+            continue
+        task = process_task(title, issue)
+        tasks[task["task_link"]] = task
+        tasks[task["task_link"]]["proposals"] = []
+
+    # Proposal
+    for issue in issues:
+        title = issue.get("title", "").strip()
         if "pull_request" in issue:
             continue
 
-        title = issue.get("title", "").strip()
         if title.lower().startswith(("proposal: ", "proposal ")):
             task_links = list(tasks.keys())
             proposal = process_proposal(title, issue, tasks)
             tasks[proposal["linked_tasks"]]["proposals"].append(proposal)
-        else:
-            task = process_task(title, issue)
-            tasks[task["task_link"]] = task
-            tasks[task["task_link"]]["proposals"] = []
-
+    
     return tasks
 
 
@@ -151,7 +186,7 @@ def generate_metrics(tasks):
 
 
 if __name__ == "__main__":
-    issues = get_issues(repo_url)
+    issues = get_issues()
     issues.reverse()
     tasks = preprocess_issues(issues)
     write_to_csv(tasks, output_csv_path)
