@@ -6,5 +6,5 @@ This tool generates the tracker of open task and proposal for internal use.
 
 ```bash
 poetry install
-poetry run python3 src/main.py   
+poetry run python3 index.py
 ```

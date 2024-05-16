@@ -1,25 +1,16 @@
 import requests
-import csv
-import re
 import os
 import time
 from time import sleep
-from dotenv import load_dotenv
-from datetime import datetime, timedelta
-from parser import (
-    parse_issue_link_from_body,
+from src.parser import (
+    parse_issue_meta_data,
     parse_milestone,
     parse_project_complexity,
     parse_dates_and_format,
     parse_pricing,
 )
-from csv_writer import write_to_csv
-import logging
-
-logger = logging.getLogger(__name__)
-logging.basicConfig(filename='app.log', encoding='utf-8', level=logging.DEBUG, format='%(levelname)s:%(asctime)s %(message)s')
-
-load_dotenv()
+from src.csv_writer import write_to_csv
+from src.logger import logger
 
 GH_PERSONAL_ACCESS_TOKEN = os.getenv("GH_PERSONAL_ACCESS_TOKEN")
 
@@ -55,12 +46,13 @@ def get_issues():
                 reset_time = int(response.headers["X-RateLimit-Reset"])
                 now = time.time()
                 wait_time = reset_time - now + 10  # Add 10 seconds buffer
-                print(f"Rate limit exceeded, waiting for {wait_time} seconds...")
+                logger.warn(f"Rate limit exceeded, waiting for {wait_time} seconds...")
                 sleep(wait_time)
             else:
                 break
 
-    return issues
+    # Reverse the list to get the oldest issue first, so that proposal can always link to the task. Otherwise, the task might not be created yet.    
+    return issues[::-1]
 
 
 def process_task(title, issue):
@@ -102,19 +94,11 @@ def process_task(title, issue):
 
 
 def process_proposal(title, issue, tasks):
-    body = issue.get("body", "")
-    issue_link = issue.get("html_url")
-    assignee_data = issue.get("assignee")
-    assignee = assignee_data.get("login", "") if assignee_data else ""
-    creator = issue.get("user", {}).get("login", "")
-    linked_tasks = parse_issue_link_from_body(body, title)
-    try:
-        project_complexity = tasks[linked_tasks]["project_complexity"]
-    except KeyError:
-        raise ValueError(f"Error: {title} linked task not found.")
+    logger.debug(f"Processing proposal: {title}, {issue.get('html_url')}")
+    body, issue_link, assignee, creator, linked_tasks, project_complexity = parse_issue_meta_data(title, issue, tasks)
     working_hour_data = parse_milestone(body, title, project_complexity)
     start_end_date = parse_dates_and_format(body)
-
+    
     return {
         "creator": creator,
         "assignee": assignee,
@@ -125,17 +109,34 @@ def process_proposal(title, issue, tasks):
         **working_hour_data,
     }
 
-
 def preprocess_issues(issues):
     """ 
     get task and proposal separately
     """
-
-    tasks = {}
-    proposals = {}
-    logger.info('preprocess_issue')
     
-    # Task
+    logger.info('preprocess_issue')
+    tasks = process_tasks(issues)
+    tasks = process_proposals(issues, tasks)
+    
+    return tasks
+
+def process_proposals(issues, tasks):
+    """  
+    dependent: rely on the task to be created first
+    TODO: refactor to decouple the task creation and proposal creation
+    """
+    for issue in issues:
+        title = issue.get("title", "").strip()
+        if "pull_request" in issue:
+            continue
+
+        if title.lower().startswith(("proposal: ", "proposal ")):
+            proposal = process_proposal(title, issue, tasks)
+            tasks[proposal["linked_tasks"]]["proposals"].append(proposal)
+    return tasks
+
+def process_tasks(issues):
+    tasks = {}
     for issue in issues:
         title = issue.get("title", "").strip()
         if "pull_request" in issue:
@@ -145,18 +146,6 @@ def preprocess_issues(issues):
         task = process_task(title, issue)
         tasks[task["task_link"]] = task
         tasks[task["task_link"]]["proposals"] = []
-
-    # Proposal
-    for issue in issues:
-        title = issue.get("title", "").strip()
-        if "pull_request" in issue:
-            continue
-
-        if title.lower().startswith(("proposal: ", "proposal ")):
-            task_links = list(tasks.keys())
-            proposal = process_proposal(title, issue, tasks)
-            tasks[proposal["linked_tasks"]]["proposals"].append(proposal)
-    
     return tasks
 
 
@@ -185,9 +174,8 @@ def generate_metrics(tasks):
     return metrics
 
 
-if __name__ == "__main__":
+def run():
     issues = get_issues()
-    issues.reverse()
     tasks = preprocess_issues(issues)
     write_to_csv(tasks, output_csv_path)
     print(f"Data written to {output_csv_path}")

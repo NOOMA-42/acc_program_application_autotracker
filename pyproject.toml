@@ -5,12 +5,14 @@ description = ""
 authors = ["NOOMA-42 <tzuchun42@gmail.com>"]
 readme = "README.md"
 include = ["src"]
+package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.11"
 requests = "^2.31.0"
 python-dotenv = "^1.0.1"
 ruff = "^0.3.5"
+pytest = "^8.2.0"
 
 
 [tool.poetry.group.dev.dependencies]
@@ -19,3 +21,8 @@ pandas = "^2.2.2"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = [
+    "tests",
+]

@@ -1,9 +1,8 @@
-import requests
-import csv
 import re
 import os
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
+from src.logger import logger
 
 load_dotenv()
 
@@ -30,122 +29,38 @@ def parse_issue_link_from_body(body, issue_title):
         )
     return links
 
+def parse_issue_meta_data(title, issue, tasks):
+    body = issue.get("body", "")
+    issue_link = issue.get("html_url")
+    assignee_data = issue.get("assignee")
+    assignee = assignee_data.get("login", "") if assignee_data else ""
+    creator = issue.get("user", {}).get("login", "")
+    linked_tasks = parse_issue_link_from_body(body, title)
+    try:
+        project_complexity = tasks[linked_tasks]["project_complexity"]
+    except KeyError:
+        raise ValueError(f"Error: {title} linked task not found.")
+    return body,issue_link,assignee,creator,linked_tasks,project_complexity
 
 def parse_milestone(body, issue_title, project_complexity):
-    body = re.sub(r"\*\*|\r\n", "", body)
+    body = clean_body(body)
+    
+    total_duration_value, total_duration_unit = extract_total_duration(body)
+    total_fte = extract_total_fte(body)
+    total_working_hours = extract_total_working_hours(body)
 
-    # Regex patterns to find durations, FTEs, and hours
-    total_duration_pattern = (
-        r"Total Estimated Duration: (\d+) (hours|weeks|months|week|month|hour)"
-    )
-    total_fte_pattern = r"Full-time equivalent \(FTE\):[\s]*([\d.]+)"
-    total_working_hours_pattern = r"Total Estimated Working Hours: (\d+) hours"
+    milestones_duration, milestone_fte = extract_milestone_data(body, issue_title)
 
-    milestone_duration_pattern = r"(?<!Total )Estimated Duration:[\s]*(\d+(?:\.\d+)?)\s*(hours|weeks|months|week|month|hour)"
-    milestone_fte_pattern = r"FTE:[\s]*([\d.]+)"
-
-    # Extract total duration and FTE
-    total_duration_match = re.search(total_duration_pattern, body)
-    total_fte_match = re.search(total_fte_pattern, body)
-    total_working_hours_match = re.search(total_working_hours_pattern, body)
-
-    # Default values in case not found
-    total_duration_value = "error"
-    total_duration_unit = "error"
-    total_fte = "error" if not total_fte_match else total_fte_match.group(1)
-    total_working_hours = (
-        "error" if not total_working_hours_match else total_working_hours_match.group(1)
+    formatted_equation_components, format_cost_per_milestone_components, total_working_hours_calculated = process_milestones(
+        milestones_duration, milestone_fte, project_complexity
     )
 
-    if total_duration_match:
-        total_duration_value = int(total_duration_match.group(1))
-        total_duration_unit = total_duration_match.group(2)
+    formatted_equation = format_equation(formatted_equation_components)
+    format_cost_per_milestone = format_cost_components(format_cost_per_milestone_components)
 
-    # Find all milestones duration and FTEs
-    try:
-        milestones_duration = re.findall(milestone_duration_pattern, body)
-        milestone_fte = re.findall(milestone_fte_pattern, body)
-    except re.error:
-        # Handle the regular expression error gracefully
-        milestones_duration = []
-        milestone_fte = []
-        raise ValueError(
-            f"{issue_title}, Error processing milestones in the issue body."
-        )
+    validate_total_working_hours(total_working_hours, total_working_hours_calculated, issue_title)
 
-    # Process each milestone
-    formatted_equation_components = []
-    format_cost_per_milestone_components = []
-    total_working_hours_calculated = 0
-    format_cost_per_milestone = ""
-
-    for (duration, unit), fte in zip(milestones_duration, milestone_fte):
-        # Calculate milestone duration in hours
-        duration = float(duration)
-        if unit == "hours" or unit == "hour":
-            milestone_hours = duration
-        elif unit == "weeks" or unit == "week":
-            milestone_hours = (
-                duration * 5 * 8
-            )  # Assuming 5 days per week and 8 hours per day
-        elif unit == "months" or unit == "month":
-            milestone_hours = (
-                duration * 4 * 5 * 8
-            )  # Assuming 4 weeks per month, 5 days per week, and 8 hours per day
-        else:
-            milestone_hours = "error"
-        total_working_hours_calculated += milestone_hours * float(fte)
-
-        # Calculate cost per milestone based on project complexity
-        if project_complexity == "Easy":
-            milestone_cost = milestone_hours * float(fte) * float(easy_cost)
-        elif project_complexity == "Medium":
-            milestone_cost = milestone_hours * float(fte) * float(medium_cost)
-        elif project_complexity == "Hard":
-            milestone_cost = milestone_hours * float(fte) * float(hard_cost)
-        else:
-            milestone_cost = "error"
-        format_cost_per_milestone_components.append(milestone_cost)
-
-        # Formatting the equation for each milestone
-        if project_complexity == "Easy":
-            formatted_equation_components.append(
-                f"({duration} {unit} * {fte} FTE) * ${easy_cost}"
-            )
-        elif project_complexity == "Medium":
-            formatted_equation_components.append(
-                f"({duration} {unit} * {fte} FTE) * ${medium_cost}"
-            )
-        elif project_complexity == "Hard":
-            formatted_equation_components.append(
-                f"({duration} {unit} * {fte} FTE) * ${hard_cost}"
-            )
-        else:
-            formatted_equation_components.append(
-                f"({duration} {unit} * {fte} FTE) * $ERROR"
-            )
-
-    formatted_equation = (
-        " + ".join(formatted_equation_components)
-        if formatted_equation_components
-        else "error"
-    )
-    for i, num in enumerate(format_cost_per_milestone_components, start=1):
-        format_cost_per_milestone += f"m{i} = ${num}; "
-
-    # Check if the total working hours calculated is the same as the one provided in the issue body
-    if total_working_hours_match and total_working_hours_calculated != int(
-        total_working_hours_match.group(1)
-    ):
-        raise ValueError(
-            f"Issue '{issue_title}': Total working hours calculated ({total_working_hours_calculated}) do not match the provided value ({total_working_hours_match.group(1)})."
-        )
-
-    # Total Cost
-    total_cost = 0
-    for milestone_cost in format_cost_per_milestone_components:
-        if milestone_cost != "error":
-            total_cost += milestone_cost
+    total_cost = calculate_total_cost(format_cost_per_milestone_components)
 
     return {
         "total_duration_value": total_duration_value,
@@ -154,10 +69,93 @@ def parse_milestone(body, issue_title, project_complexity):
         "formatted_equation": formatted_equation,
         "format_cost_per_milestone": format_cost_per_milestone,
         "total_cost": total_cost,
-        "total_working_hours": total_working_hours_calculated
-        if total_working_hours_calculated
-        else "error",
+        "total_working_hours": total_working_hours_calculated if total_working_hours_calculated else "error",
     }
+
+def clean_body(body):
+    return re.sub(r"\*\*|\r\n", "", body)
+
+def extract_total_duration(body):
+    pattern = r"Total Estimated Duration: (\d+) (hours|weeks|months|week|month|hour)"
+    match = re.search(pattern, body)
+    if match:
+        return int(match.group(1)), match.group(2)
+    return "error", "error"
+
+def extract_total_fte(body):
+    pattern = r"Full-time equivalent \(FTE\):[\s]*([\d.]+)"
+    match = re.search(pattern, body)
+    return "error" if not match else match.group(1)
+
+def extract_total_working_hours(body):
+    pattern = r"Total Estimated Working Hours: (\d+) (hours|hrs)"
+    match = re.search(pattern, body)
+    return "error" if not match else match.group(1)
+
+def extract_milestone_data(body, issue_title):
+    try:
+        duration_pattern = r"(?<!Total )Estimated Duration:[\s]*(\d+(?:\.\d+)?)[\s]*(hours|weeks|months|week|month|hour|days|day)"
+        fte_pattern = r"FTE:[\s]*([\d.]+)"
+        milestones_duration = re.findall(duration_pattern, body)
+        milestone_fte = re.findall(fte_pattern, body)
+        return milestones_duration, milestone_fte
+    except re.error:
+        logger.error(f"{issue_title}, Error processing milestones in the issue body.")
+
+def process_milestones(milestones_duration, milestone_fte, project_complexity):
+    formatted_equation_components = []
+    format_cost_per_milestone_components = []
+    total_working_hours_calculated = 0
+
+    cost_factors = {
+        "Easy": float(easy_cost),
+        "Medium": float(medium_cost),
+        "Hard": float(hard_cost),
+    }
+
+    for (duration, unit), fte in zip(milestones_duration, milestone_fte):
+        milestone_hours = calculate_milestone_hours(duration, unit)
+        total_working_hours_calculated += milestone_hours * float(fte)
+
+        milestone_cost = milestone_hours * float(fte) * cost_factors.get(project_complexity, "error")
+        format_cost_per_milestone_components.append(milestone_cost)
+
+        formatted_equation_components.append(
+            f"({duration} {unit} * {fte} FTE) * ${cost_factors.get(project_complexity, 'ERROR')}"
+        )
+
+    return formatted_equation_components, format_cost_per_milestone_components, total_working_hours_calculated
+
+def calculate_milestone_hours(duration, unit):
+    duration = float(duration)
+    if unit in ["hours", "hour"]:
+        return duration
+    elif unit in ["weeks", "week"]:
+        return duration * 5 * 8  # Assuming 5 days per week and 8 hours per day
+    elif unit in ["months", "month"]:
+        return duration * 4 * 5 * 8  # Assuming 4 weeks per month, 5 days per week, and 8 hours per day
+    elif unit in ["days", "day"]:
+        return duration * 8
+    return "error"
+
+def format_equation(components):
+    return " + ".join(components) if components else "error"
+
+def format_cost_components(components):
+    return "".join(f"m{i+1} = ${num}; " for i, num in enumerate(components))
+
+def validate_total_working_hours(provided_hours, calculated_hours, issue_title):
+    if provided_hours != "error" and calculated_hours != int(provided_hours):
+        raise ValueError(
+            f"Issue '{issue_title}': Total working hours calculated ({calculated_hours}) do not match the provided value ({provided_hours})."
+        )
+
+def calculate_total_cost(cost_components):
+    total_cost = 0
+    for cost in cost_components:
+        if cost != "error":
+            total_cost += cost
+    return total_cost
 
 
 def parse_project_complexity(body):
