@@ -10,7 +10,6 @@ easy_cost = os.getenv("EASY")
 medium_cost = os.getenv("MEDIUM")
 hard_cost = os.getenv("HARD")
 
-
 def parse_issue_link_from_body(body, issue_title):
     """  
     A parser for proposal
@@ -43,6 +42,7 @@ def parse_issue_meta_data(title, issue, tasks):
     return body,issue_link,assignee,creator,linked_tasks,project_complexity
 
 def parse_milestone(body, issue_title, project_complexity):
+    print("Parsing Milestone", issue_title)
     body = clean_body(body)
     
     total_duration_value, total_duration_unit = extract_total_duration(body)
@@ -117,8 +117,13 @@ def process_milestones(milestones_duration, milestone_fte, project_complexity):
         milestone_hours = calculate_milestone_hours(duration, unit)
         total_working_hours_calculated += milestone_hours * float(fte)
 
-        milestone_cost = milestone_hours * float(fte) * cost_factors.get(project_complexity, "error")
-        format_cost_per_milestone_components.append(milestone_cost)
+        try:
+            milestone_cost = milestone_hours * float(fte) * cost_factors.get(project_complexity, "error")
+            format_cost_per_milestone_components.append(milestone_cost)
+        except TypeError:
+            logger.error(f"Error: Invalid project complexity '{project_complexity}'")
+        except UnboundLocalError:
+            logger.error(f"Error: local variable 'milestone_cost' where it is not associated with a value, make sure you have assigned a value to it")
 
         formatted_equation_components.append(
             f"({duration} {unit} * {fte} FTE) * ${cost_factors.get(project_complexity, 'ERROR')}"

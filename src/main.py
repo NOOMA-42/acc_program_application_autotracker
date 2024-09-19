@@ -22,7 +22,6 @@ headers = {
 repo_url = "https://api.github.com/repos/privacy-scaling-explorations/acceleration-program/issues"
 output_csv_path = "issues.csv"
 
-
 def get_issues():
     issues = []
     url = repo_url
@@ -53,7 +52,6 @@ def get_issues():
 
     # Reverse the list to get the oldest issue first, so that proposal can always link to the task. Otherwise, the task might not be created yet.    
     return issues[::-1]
-
 
 def process_task(title, issue):
     body = issue.get("body", "")
@@ -91,7 +89,6 @@ def process_task(title, issue):
         "Pricing Per Hours": pricing_per_hours,
         "task_link": issue_link,
     }
-
 
 def process_proposal(title, issue, tasks):
     logger.debug(f"Processing proposal: {title}, {issue.get('html_url')}")
